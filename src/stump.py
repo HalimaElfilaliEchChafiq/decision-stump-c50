@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from collections import Counter
 from .splitters import find_best_split
+# Ajout de la sécurité
+from .preprocessing import check_X_y
 
 class DecisionStump:
     def __init__(self, criterion="gain_ratio"):
@@ -18,15 +20,16 @@ class DecisionStump:
         self.root_majority_ = None
 
     def fit(self, X, y, sample_weight=None):
-        X = np.array(X)
-        y = np.array(y)
+        # 1. Nettoyage et Vérification (Nouveau)
+        X, y = check_X_y(X, y)
+        
         if sample_weight is None: sample_weight = np.ones(len(y))
         
-        # 1. Calculer la majorité globale (Fallback)
+        # 2. Calculer la majorité globale (Fallback)
         self.classes_ = np.unique(y)
         self.root_majority_ = Counter(y).most_common(1)[0][0]
         
-        # 2. Trouver le meilleur split via splitters.py
+        # 3. Trouver le meilleur split via splitters.py
         split_result = find_best_split(X, y, sample_weight)
         
         if split_result is None or split_result.get('score', -np.inf) <= 0:
@@ -34,12 +37,12 @@ class DecisionStump:
             self.feature_index_ = None
             return self
             
-        # 3. Sauvegarder les paramètres du modèle
+        # 4. Sauvegarder les paramètres du modèle
         self.feature_index_ = split_result['feature_idx']
         self.split_type_ = split_result['feature_type']
         self.threshold_ = split_result.get('split_value')
         
-        # 4. Calculer les distributions des feuilles (Pour la prédiction)
+        # 5. Calculer les distributions des feuilles (Pour la prédiction)
         self._compute_leaf_distributions(X, y, sample_weight)
         
         return self
@@ -68,6 +71,9 @@ class DecisionStump:
 
     def predict(self, X):
         X = np.array(X)
+        # Si X est un vecteur 1D, on le reshape
+        if X.ndim == 1: X = X.reshape(1, -1)
+            
         n_samples = len(X)
         preds = np.empty(n_samples, dtype=self.classes_.dtype)
         
