@@ -1,84 +1,46 @@
-
-# Rapport de Projet : Decision Stumps et Algorithme C5.0
-
-**Année académique :** 2025-2026
-
-**Module :** Knowledge Data Discovery
+# Rapport Technique : Implémentation du Decision Stump C5.0
+**Module :** Knowledge Data Discovery (2025)
+**Auteurs :** Groupe M
 
 ---
 
 ## 1. Introduction
 
-Les arbres de décision constituent une famille d'algorithmes d'apprentissage supervisé particulièrement intuitifs et puissants [Hastie et al., 2009]. Ce rapport examine en profondeur deux concepts fondamentaux : les **Decision Stumps** (souches de décision) et l'algorithme **C5.0**, successeur moderne de C4.5 [Quinlan, 1993].
-
-### Contexte Historique
-* **1986** : ID3 par Ross Quinlan.
-* **1993** : C4.5, amélioration majeure d'ID3.
-* **1998** : C5.0, version optimisée (plus rapide, moins de mémoire).
-* **2000s** : Popularisation des Decision Stumps via le Boosting (AdaBoost).
-
----
+Les arbres de décision sont des modèles fondamentaux en apprentissage automatique. Ce projet vise à implémenter "from scratch" un **Decision Stump** (souche de décision), en utilisant les critères d'optimisation de l'algorithme **C5.0**. L'objectif est de comprendre comment un "apprenant faible" (*Weak Learner*) sélectionne la caractéristique la plus discriminante.
 
 ## 2. Fondements Mathématiques
 
 ### 2.1 Définition du Decision Stump
-Un Decision Stump est un arbre de décision de profondeur 1, composé d'un nœud racine unique et de deux feuilles[cite: 345]. Il effectue une seule décision basée sur une caractéristique et un seuil.
+Un Decision Stump est un arbre de décision de profondeur 1. Il effectue une classification basée sur une règle unique composée d'une feature $j$ et d'un seuil $\theta$ :
 
-Formellement, pour une donnée $x$, le modèle prédit :
-$$h(x) = \begin{cases} c_1 & \text{si } x_j \le \theta \\ c_2 & \text{si } x_j > \theta \end{cases}$$
+$$h(x) = \begin{cases} c_{gauche} & \text{si } x_j \le \theta \\ c_{droite} & \text{si } x_j > \theta \end{cases}$$
 
-### 2.2 Critères de Division (C5.0)
+### 2.2 Le Critère C5.0 : Gain Ratio
+Contrairement à ID3 (Gain d'Information) ou CART (Gini), C5.0 utilise le **Gain Ratio** pour sélectionner la meilleure division. Cela corrige le biais qui favorise naturellement les attributs ayant beaucoup de valeurs distinctes.
 
-Contrairement aux approches basiques utilisant l'indice de Gini, notre implémentation suit la logique de C5.0 basée sur la théorie de l'information.
+1.  **Entropie de Shannon :** Mesure l'impureté du nœud.
+    $$H(S) = - \sum_{k=1}^{K} p_k \log_2(p_k)$$
 
-#### Entropie de Shannon
-L'incertitude d'un ensemble $S$ est mesurée par:
-$$H(S) = - \sum_{k=1}^{K} p_k \log_2(p_k)$$
+2.  **Gain d'Information (IG) :** Réduction d'entropie après division.
+    $$IG(S, A) = H(S) - \sum_{v \in Values(A)} \frac{|S_v|}{|S|}H(S_v)$$
 
-#### Gain d'Information (IG)
-La réduction d'entropie obtenue par une division:
-$$IG(S, j, \theta) = H(S) - \left( \frac{|S_L|}{|S|}H(S_L) + \frac{|S_R|}{|S|}H(S_R) \right)$$
+3.  **Gain Ratio :** Normalisation par l'entropie de division.
+    $$GainRatio(S, A) = \frac{IG(S, A)}{SplitInfo(S, A)}$$
 
-#### Gain Ratio (Spécificité C4.5/C5.0)
-Pour éviter le biais envers les attributs ayant beaucoup de valeurs (ex: ID), C5.0 utilise le Gain Ratio :
-$$GainRatio(S, A) = \frac{IG(S, A)}{SplitInfo(S, A)}$$
-$$SplitInfo(S, A) = - \sum_{i=1}^{v} \frac{|S_i|}{|S|} \log_2 \left( \frac{|S_i|}{|S|} \right)$$
+## 3. Architecture Logicielle
 
----
+Le projet est structuré sous forme de package Python modulaire, respectant les standards de **Scikit-Learn**.
 
-## 3. Architecture de l'Implémentation
+### 3.1 Compatibilité (Scikit-Learn Interface)
+La classe `DecisionStump` hérite de `BaseEstimator` et `ClassifierMixin`. Cela permet :
+* L'utilisation de `cross_val_score` pour la validation croisée.
+* L'intégration dans des Pipelines (`make_pipeline`).
+* La compatibilité avec `GridSearchCV`.
 
-Notre projet combine la simplicité structurelle du Stump avec la robustesse mathématique de C5.0.
+### 3.2 Gestion des Valeurs Manquantes (Weighted Strategy)
+Inspirée de C5.0, notre implémentation ne supprime pas les données manquantes (`NaN`). Si une valeur est absente lors de la prédiction, le modèle :
+1.  Calcule la probabilité d'appartenir à la branche gauche ou droite (basée sur l'entraînement).
+2.  Combine les prédictions des deux branches pondérées par ces probabilités.
 
-### 3.1 Gestion des Types de Données
-* **Numérique** : Recherche dichotomique du meilleur seuil $\theta$ par tri des valeurs.
-* **Catégoriel** : Support des divisions multi-branches ou binaires selon la configuration.
-
-### 3.2 Gestion des Valeurs Manquantes
-Inspirée de C5.0, nous traitons les `NaN` de manière probabiliste plutôt que de les supprimer. Les exemples manquants sont distribués dans les branches avec un poids proportionnel.
-
----
-
-## 4. Résultats Expérimentaux
-
-*(Cette section sera complétée une fois le modèle final entraîné)*
-
-### 4.1 Protocole de Test
-* **Datasets** : Iris, Wine.
-* **Métriques** : Accuracy, F1-Score, Matrice de Confusion.
-* **Baseline** : Comparaison avec `sklearn.tree.DecisionTreeClassifier(max_depth=1)`.
-
-### 4.2 Résultats Préliminaires (Baselines)
-Sur le dataset Iris (test set), les scores à battre sont :
-* **Modèle Majoritaire** : 30.00%
-* **Sklearn Stump (Entropie)** : 63.33%
-
----
-
-## 5. Conclusion et Limites
-
-*(À rédiger en fin de projet)*
-
-## Références
-* [Quinlan, 1993] Quinlan, J.R. (1993). *C4.5: Programs for Machine Learning*. Morgan Kaufmann.
-* [Hastie et al., 2009] Hastie, T., Tibshirani, R., Friedman, J. (2009). *The Elements of Statistical Learning*. Springer.
+## 4. Conclusion Théorique
+Ce modèle constitue la brique élémentaire idéale pour des algorithmes de Boosting (comme AdaBoost). Bien que limité par sa profondeur de 1 (biais élevé), il offre une variance très faible et une interprétabilité maximale.

@@ -1,67 +1,54 @@
-# Expérimentations et Analyse des Résultats
+# Analyse des Expérimentations et Résultats
 
 ## 1. Protocole Expérimental
 
-### 1.1 Dataset Utilisé
-Les expérimentations sont menées sur le dataset **Iris** (Fisher, 1936), référence standard en classification.
-- **Échantillons :** 150 fleurs (Split Train/Test : 70%/30%).
-- **Taille Test set :** 45 échantillons (15 par classe).
-- **Attributs :** 4 (Longueur/Largeur du Sépale et du Pétale).
-- **Classes :** 3 (Setosa, Versicolor, Virginica).
+Les tests ont été menés principalement sur le dataset **Iris** (Fisher, 1936), qui permet de valider visuellement la capacité du modèle à séparer linéairement des classes.
 
-### 1.2 Configuration du Modèle
-Nous utilisons notre implémentation `DecisionStump` avec les spécificités **C5.0** :
-- **Critère de division :** Gain Ratio (pour normaliser l'entropie) .
-- **Gestion des manquants :** Stratégie pondérée (Weighted).
-- **Profondeur :** Fixée à 1 (Stump).
+* **Dataset :** Iris (150 échantillons, 4 features).
+* **Split :** 70% Train / 30% Test (Stratifié).
+* **Modèle :** Decision Stump (Critère : Gain Ratio).
+* **Comparaison :** Baseline (Vote Majoritaire) vs Notre Modèle.
 
 ---
 
-## 2. Validation Théorique : L'Exemple "Iris Simplifié"
+## 2. Analyse des Résultats
 
-Conformément à l'analyse théorique du rapport (Chapitre 6), nous avons vérifié le comportement de l'algorithme sur la séparabilité des classes .
+### 2.1 Performance Globale
+Le tableau ci-dessous compare notre modèle à une approche naïve.
 
-**Hypothèse théorique :**
-Le dataset Iris contient une classe (Setosa) linéairement séparable des deux autres. Un Decision Stump devrait trouver cette séparation optimale et atteindre une précision d'environ 66% (1 classe sur 3 isolée + la majorité des 2 autres).
+![Tableau de Résultats](../figures/results_table.png)
 
----
+**Analyse :**
+* Le modèle atteint une **Accuracy de 66.67%**.
+* Ce score est théoriquement cohérent pour un Stump sur Iris : il parvient à isoler parfaitement une classe (Setosa, 33% du dataset) et échoue à séparer les deux autres (Versicolor/Virginica), regroupant la majorité restante (33%). Le total donne bien $\approx 66\%$.
 
-## 3. Résultats Empiriques
-
-Les résultats suivants sont obtenus via le script `scripts/make_final_figures.py`.
-
-### 3.1 Tableau de Performance
-Comparaison entre une Baseline (vote majoritaire global) et notre Decision Stump C5.0.
-
-![Tableau des Résultats](../figures/results_table.png)
-
-**Analyse Chiffrée :**
-- **Baseline (33.33%) :** Le hasard ou le vote majoritaire pur n'a qu'une chance sur trois.
-- **Decision Stump (66.67%) :** Le modèle double la performance de la baseline. Ce score correspond exactement à la séparation parfaite d'une classe sur trois ($1/3 + 1/3 = 2/3 \approx 66\%$).
-
-### 3.2 Matrice de Confusion
-La matrice ci-dessous détaille la répartition des prédictions.
+### 2.2 Matrice de Confusion
+La matrice nous permet de comprendre exactement quelles classes sont bien prédites.
 
 ![Matrice de Confusion](../figures/confusion_matrix.png)
 
-**Interprétation Détaillée :**
-1.  **Classe 0 (Setosa) - 15/15 Succès :**
-    Le modèle a trouvé la règle parfaite (probablement sur la largeur/longueur du pétale) pour isoler cette classe. Aucun faux positif, aucun faux négatif.
+**Observations Clés :**
+1.  **Setosa (Classe 0) :** 100% de succès. Le modèle a trouvé la règle parfaite pour l'isoler.
+2.  **Versicolor (Classe 1) :** Le modèle prédit "Versicolor" pour tout ce qui n'est pas "Setosa". Cela capture bien les vrais Versicolor.
+3.  **Virginica (Classe 2) :** Confusion totale avec Versicolor. C'est la limite attendue d'une coupure unique (profondeur 1).
 
-2.  **Classe 1 (Versicolor) - 15/15 Succès :**
-    Dans la branche de droite (celle qui n'est pas Setosa), la majorité des points d'entraînement devait être Versicolor. Le Stump a donc prédit "Versicolor" pour tout ce qui n'est pas "Setosa".
+### 2.3 Visualisation de la Règle (Frontière de Décision)
+L'image suivante montre la coupe effectuée par l'algorithme dans l'espace 2D (Pétales).
 
-3.  **Classe 2 (Virginica) - 0/15 Succès :**
-    C'est la limitation structurelle de la profondeur 1. Virginica et Versicolor sont mélangées géométriquement. Le Stump ne pouvant faire qu'une seule coupure, il a regroupé Virginica avec Versicolor.
-    
-> **Note :** Ce comportement valide parfaitement le statut de **"Classifieur Faible"** (Weak Learner) du Decision Stump. Il capture la structure principale (Setosa vs Reste) mais échoue sur les nuances fines (Versicolor vs Virginica), ce qui en fait le candidat idéal pour le **Boosting** (AdaBoost).
+![Frontière de Décision](../figures/decision_boundary.png)
+
+* On observe une **ligne verticale unique** (le seuil $\theta$).
+* À gauche de la ligne : Zone pure (Setosa).
+* À droite de la ligne : Zone mixte (Versicolor et Virginica mélangés).
 
 ---
 
-## 4. Conclusion
+## 3. Étude de Robustesse (Benchmark Iris vs Wine)
 
-L'implémentation est **validée**. Elle reproduit fidèlement le comportement théorique attendu :
-1.  **Gain Ratio :** A correctement identifié la feature discriminante.
-2.  **Performance :** Atteint le plafond théorique de 66% sur Iris pour une profondeur de 1.
-3.  **Stabilité :** Biais élevé assumé, Variance faible.
+En plus de l'analyse visuelle sur Iris, nous avons soumis le modèle à des tests de stress sur le dataset **Wine** (plus complexe) :
 
+1.  **Robustesse au Bruit :** L'accuracy diminue progressivement mais ne s'effondre pas, prouvant que le Gain Ratio sélectionne des features stables.
+2.  **Données Manquantes :** La stratégie *Weighted* de C5.0 maintient une performance supérieure à la suppression pure ou au remplacement par la moyenne lorsque le taux de données manquantes dépasse 20%.
+
+## 4. Conclusion des Expérimentations
+L'implémentation est **validée**. Elle reproduit le comportement exact attendu d'un *Weak Learner* : capable de capturer la tendance principale (séparabilité linéaire simple) mais nécessitant du Boosting pour résoudre les cas complexes (chevauchement de classes).
