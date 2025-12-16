@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decision-stump-c50"
+version = "0.1.0"
+description = "Implémentation from-scratch d'un Decision Stump avec spécificités C5.0 (Gain Ratio, Missing Values)"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    { name = "Équipe KDD", email = "etudiant@ensam.meknes.ma" }
+]
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",  # Utilisé pour les datasets et métriques de comparaison
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black",
+    "isort",
+    "flake8",
+    "jupyter"
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+pythonpath = [
+    "src"
+]
