@@ -1,109 +1,284 @@
 """
-Decision Stump C5.0 Implementation.
-Utilise le Gain Ratio et la gestion des valeurs manquantes.
+Implémentation du Decision Stump (C5.0).
+Version Compatible Scikit-Learn (BaseEstimator, ClassifierMixin).
 """
+
+from __future__ import annotations
+from typing import Optional, Union, List, Dict, Any
 import numpy as np
-import pandas as pd
-from collections import Counter
+import warnings
+
+# Gestion robuste de l'import pandas
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+# --- AJOUT INDISPENSABLE POUR SKLEARN ---
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+from sklearn.utils.multiclass import unique_labels
+
+# Imports internes
 from .splitters import find_best_split
-# Ajout de la sécurité
-from .preprocessing import check_X_y
 
-class DecisionStump:
-    def __init__(self, criterion="gain_ratio"):
-        # Le criterion est forcé à gain_ratio via nos imports, mais on le garde pour l'API
+class DecisionStump(BaseEstimator, ClassifierMixin):
+    """
+    Un Decision Stump (arbre de profondeur 1) implémentant la logique C5.0.
+    Compatible avec les outils Scikit-Learn (cross_val_score, GridSearchCV).
+    """
+
+    def __init__(
+        self,
+        criterion: str = "gain_ratio",
+        missing_strategy: str = "weighted",
+        min_samples_split: int = 2,
+        random_state: Optional[int] = None,
+    ):
         self.criterion = criterion
-        self.feature_index_ = None
-        self.threshold_ = None
-        self.split_type_ = None
-        self.distributions_ = None # Pour stocker les probas des feuilles
-        self.root_majority_ = None
+        self.missing_strategy = missing_strategy
+        self.min_samples_split = min_samples_split
+        self.random_state = random_state
 
-    def fit(self, X, y, sample_weight=None):
-        # 1. Nettoyage et Vérification (Nouveau)
-        X, y = check_X_y(X, y)
+    def fit(
+        self,
+        X: Union[np.ndarray, "pd.DataFrame"],
+        y: Union[np.ndarray, list],
+        sample_weight: Optional[Union[np.ndarray, list]] = None,
+        feature_names: Optional[List[str]] = None,
+    ) -> "DecisionStump":
+        """Entraîne le modèle sur les données."""
         
-        if sample_weight is None: sample_weight = np.ones(len(y))
+        # Réinitialisation des attributs
+        self.feature_index_ = None
+        self.feature_name_ = None
+        self.feature_type_ = None
+        self.threshold_ = None
+        self.categories_ = None
+        self.class_distributions_ = None
+        self.root_distribution_ = None
+        self.branch_proportions_ = None
         
-        # 2. Calculer la majorité globale (Fallback)
-        self.classes_ = np.unique(y)
-        self.root_majority_ = Counter(y).most_common(1)[0][0]
+        # 1. Validation Sklearn (convertit tout en numpy)
+        # accept_sparse=False car notre stump ne gère pas les matrices creuses pour l'instant
+        # force_all_finite='allow-nan' car on gère les NaN (C5.0)
+        X_array, y_array = check_X_y(X, y, force_all_finite='allow-nan', dtype=None)
         
-        # 3. Trouver le meilleur split via splitters.py
-        split_result = find_best_split(X, y, sample_weight)
+        self.classes_ = unique_labels(y_array)
+        self.n_classes_ = len(self.classes_)
         
-        if split_result is None or split_result.get('score', -np.inf) <= 0:
-            # Pas de bon split trouvé
-            self.feature_index_ = None
-            return self
-            
-        # 4. Sauvegarder les paramètres du modèle
-        self.feature_index_ = split_result['feature_idx']
-        self.split_type_ = split_result['feature_type']
-        self.threshold_ = split_result.get('split_value')
+        # Gestion des poids
+        if sample_weight is None:
+            sample_weight_array = np.ones(len(y_array))
+        else:
+            sample_weight_array = np.asarray(sample_weight).ravel()
         
-        # 5. Calculer les distributions des feuilles (Pour la prédiction)
-        self._compute_leaf_distributions(X, y, sample_weight)
-        
+        # Normalisation des poids
+        total_weight = np.sum(sample_weight_array)
+        if total_weight > 0:
+            sample_weight_array /= total_weight
+
+        # Noms de features
+        self.feature_names_ = self._get_feature_names(X, feature_names, X_array.shape[1])
+
+        # 2. Calcul de la distribution racine
+        self.root_distribution_ = self._compute_class_distribution(y_array, sample_weight_array)
+
+        # 3. Détection des types
+        feature_types = self._detect_feature_types(X_array)
+
+        # 4. Recherche du meilleur split
+        best_score = -np.inf
+        best_split_info = None
+
+        for feature_idx in range(X_array.shape[1]):
+            feature_col = X_array[:, feature_idx]
+            ftype = feature_types[feature_idx]
+
+            split_result = find_best_split(
+                X_feature=feature_col,
+                y=y_array,
+                feature_type=ftype,
+                sample_weight=sample_weight_array,
+                criterion=self.criterion,
+                n_thresholds=50
+            )
+
+            if split_result and split_result["score"] > best_score:
+                best_score = split_result["score"]
+                best_split_info = split_result
+                best_split_info["feature_index"] = feature_idx
+
+        # 5. Stockage
+        if best_split_info:
+            self._store_split_info(best_split_info, X_array, y_array, sample_weight_array)
+        else:
+            # Mode constant
+            self._store_no_split_info()
+
+        # Marqueur officiel sklearn pour dire "je suis entraîné"
+        self.is_fitted_ = True
         return self
 
-    def _compute_leaf_distributions(self, X, y, weights):
-        """Calcule la classe majoritaire pour chaque branche."""
-        self.distributions_ = {}
-        col = X[:, self.feature_index_]
+    def predict(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
+        """Prédit les classes."""
+        check_is_fitted(self)
+        X_array = check_array(X, force_all_finite='allow-nan', dtype=None)
         
-        if self.split_type_ == 'numerical':
-            mask_left = col <= self.threshold_
-            mask_right = ~mask_left
-            
-            self.distributions_['left'] = self._get_majority(y[mask_left])
-            self.distributions_['right'] = self._get_majority(y[mask_right])
-        else:
-            # Categorical
-            unique_vals = np.unique(col[~np.isnan(col)])
-            for val in unique_vals:
-                mask = (col == val)
-                self.distributions_[val] = self._get_majority(y[mask])
+        n_samples = X_array.shape[0]
+        predictions = np.empty(n_samples, dtype=self.classes_.dtype)
 
-    def _get_majority(self, y_subset):
-        if len(y_subset) == 0: return self.root_majority_
-        return Counter(y_subset).most_common(1)[0][0]
+        for i in range(n_samples):
+            predictions[i] = self._predict_single(X_array[i])
 
-    def predict(self, X):
-        X = np.array(X)
-        # Si X est un vecteur 1D, on le reshape
-        if X.ndim == 1: X = X.reshape(1, -1)
-            
-        n_samples = len(X)
-        preds = np.empty(n_samples, dtype=self.classes_.dtype)
+        return predictions
+    
+    def predict_proba(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
+        """Prédit les probabilités."""
+        check_is_fitted(self)
+        X_array = check_array(X, force_all_finite='allow-nan', dtype=None)
         
-        if self.feature_index_ is None:
-            return np.full(n_samples, self.root_majority_)
-            
-        col = X[:, self.feature_index_]
+        n_samples = X_array.shape[0]
+        proba = np.zeros((n_samples, self.n_classes_))
         
         for i in range(n_samples):
-            val = col[i]
+            proba[i] = self._predict_proba_single(X_array[i])
             
-            # Gestion basique NaN -> Majorité racine
-            if pd.isna(val):
-                preds[i] = self.root_majority_
+        return proba
+
+    # =========================================================================
+    # Helpers Internes
+    # =========================================================================
+
+    def _get_feature_names(self, X_origin, feature_names_arg, n_cols):
+        if feature_names_arg is not None:
+            if len(feature_names_arg) != n_cols:
+                return [f"feature_{i}" for i in range(n_cols)]
+            return list(feature_names_arg)
+        elif hasattr(X_origin, "columns"):
+            return X_origin.columns.tolist()
+        else:
+            return [f"feature_{i}" for i in range(n_cols)]
+
+    def _store_split_info(self, split_info, X, y, sample_weight):
+        self.feature_index_ = split_info["feature_index"]
+        self.feature_name_ = self.feature_names_[self.feature_index_]
+        self.feature_type_ = split_info["feature_type"]
+        
+        if self.feature_type_ == "numerical":
+            self.threshold_ = split_info["threshold"]
+        else:
+            self.categories_ = split_info["categories"]
+
+        left_mask = split_info["left_indices"]
+        right_mask = split_info["right_indices"]
+
+        self.class_distributions_ = {
+            "left": self._compute_class_distribution(y[left_mask], sample_weight[left_mask]),
+            "right": self._compute_class_distribution(y[right_mask], sample_weight[right_mask]),
+            "root": self.root_distribution_
+        }
+
+        n_total = np.sum(sample_weight)
+        n_left = np.sum(sample_weight[left_mask]) if np.any(left_mask) else 0
+        n_right = np.sum(sample_weight[right_mask]) if np.any(right_mask) else 0
+        
+        self.branch_proportions_ = {
+            "left": n_left / n_total if n_total > 0 else 0,
+            "right": n_right / n_total if n_total > 0 else 0
+        }
+
+    def _store_no_split_info(self):
+        self.feature_index_ = None
+        self.feature_name_ = None
+        self.feature_type_ = "constant"
+        self.class_distributions_ = {
+            "left": self.root_distribution_,
+            "right": self.root_distribution_,
+            "root": self.root_distribution_
+        }
+        self.branch_proportions_ = {"left": 0.5, "right": 0.5}
+
+    def _predict_single(self, x):
+        if self.feature_index_ is None:
+            return self.classes_[np.argmax(self.root_distribution_)]
+            
+        feature_val = x[self.feature_index_]
+
+        if self._is_nan(feature_val):
+            return self._handle_missing_prediction()
+
+        branch = self._get_branch(feature_val)
+        return self.classes_[np.argmax(self.class_distributions_[branch])]
+
+    def _predict_proba_single(self, x):
+        if self.feature_index_ is None:
+            return self.root_distribution_
+            
+        feature_val = x[self.feature_index_]
+
+        if self._is_nan(feature_val):
+            return self._handle_missing_probability()
+
+        branch = self._get_branch(feature_val)
+        return self.class_distributions_[branch]
+
+    def _get_branch(self, feature_val):
+        if self.feature_type_ == "numerical":
+            return "left" if feature_val <= self.threshold_ else "right"
+        else:
+            return "left" if feature_val in self.categories_ else "right"
+
+    def _handle_missing_prediction(self):
+        if self.missing_strategy == "weighted":
+            weighted_probs = np.zeros(self.n_classes_)
+            for branch, prop in self.branch_proportions_.items():
+                weighted_probs += prop * self.class_distributions_[branch]
+            return self.classes_[np.argmax(weighted_probs)]
+        elif self.missing_strategy == "majority":
+            return self.classes_[np.argmax(self.root_distribution_)]
+        else: # ignore or random
+            return np.random.choice(self.classes_)
+
+    def _handle_missing_probability(self):
+        if self.missing_strategy == "weighted":
+            weighted_probs = np.zeros(self.n_classes_)
+            for branch, prop in self.branch_proportions_.items():
+                weighted_probs += prop * self.class_distributions_[branch]
+            return weighted_probs
+        else:
+            return self.root_distribution_
+
+    def _compute_class_distribution(self, y, sample_weight):
+        # Utilisation de self.classes_ pour garantir l'ordre et la taille
+        dist = np.zeros(self.n_classes_)
+        for i, cls in enumerate(self.classes_):
+            mask = (y == cls)
+            if np.any(mask):
+                dist[i] = np.sum(sample_weight[mask])
+        
+        total = np.sum(dist)
+        if total > 0:
+            dist /= total
+        return dist
+
+    def _detect_feature_types(self, X):
+        types = []
+        for i in range(X.shape[1]):
+            col = X[:, i]
+            # On ignore les NaNs pour détecter le type
+            valid = col[~self._is_nan_array(col)]
+            
+            if len(valid) == 0:
+                types.append("categorical")
                 continue
                 
-            prediction = None
-            if self.split_type_ == 'numerical':
-                direction = 'left' if val <= self.threshold_ else 'right'
-                prediction = self.distributions_.get(direction)
-            else:
-                prediction = self.distributions_.get(val)
-            
-            # Si branche inconnue -> Majorité racine
-            if prediction is None:
-                preds[i] = self.root_majority_
-            else:
-                preds[i] = prediction
-                
-        return preds
+            is_num = np.issubdtype(np.array(valid).dtype, np.number)
+            types.append("numerical" if is_num else "categorical")
+        return types
         
-    def score(self, X, y):
-        return np.mean(self.predict(X) == y)
+    def _is_nan(self, val):
+        return val is None or (isinstance(val, float) and np.isnan(val))
+
+    def _is_nan_array(self, arr):
+        return pd.isna(arr) if pd is not None else np.isnan(arr.astype(float))

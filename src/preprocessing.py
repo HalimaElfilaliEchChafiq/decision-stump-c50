@@ -1,40 +1,76 @@
+"""
+Module de pré-traitement des données (Preprocessing).
+Validation, Nettoyage et Encodage avant l'entraînement.
+"""
+
 import numpy as np
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 def check_X_y(X, y):
     """
-    Vérifie et nettoie X et y avant l'entraînement.
-    Convertit en numpy array si nécessaire et vérifie les dimensions.
-    """
-    # 1. Conversion sécurisée
-    if isinstance(X, pd.DataFrame):
-        X = X.values
-    if isinstance(y, pd.Series):
-        y = y.values
-        
-    X = np.array(X)
-    y = np.array(y)
-    
-    # 2. Vérification des dimensions
-    if len(X) != len(y):
-        raise ValueError(f"Erreur de dimension : X({len(X)}) et y({len(y)}) doivent avoir la même taille.")
-        
-    if len(X) == 0:
-        raise ValueError("Erreur : Les données d'entraînement sont vides.")
-        
-    # 3. Vérification des valeurs infinies
-    if np.any(np.isinf(X)):
-        raise ValueError("Erreur : X contient des valeurs infinies.")
+    Valide et convertit X et y en tableaux Numpy.
+    Vérifie la cohérence des dimensions.
 
-    return X, y
+    Returns
+    -------
+    X_arr, y_arr : numpy.ndarray
+    """
+    # 1. Conversion de X
+    if pd is not None and isinstance(X, (pd.DataFrame, pd.Series)):
+        X_arr = X.values
+    else:
+        X_arr = np.asarray(X)
 
-def encode_labels(y):
-    """
-    Encode les labels textuels en entiers si nécessaire (ex: 'setosa' -> 0).
-    Retourne les labels encodés et le dictionnaire de mapping.
-    """
-    unique_classes = np.unique(y)
-    mapping = {cls: i for i, cls in enumerate(unique_classes)}
-    y_encoded = np.array([mapping[val] for val in y])
+    # 2. Conversion de y
+    if pd is not None and isinstance(y, (pd.DataFrame, pd.Series)):
+        y_arr = y.values
+    else:
+        y_arr = np.asarray(y)
     
-    return y_encoded, mapping
+    # Aplatir y si c'est un vecteur colonne
+    y_arr = y_arr.ravel()
+
+    # 3. Vérifications
+    if X_arr.ndim != 2:
+        # Si X est 1D (une seule feature), on le reshape en (N, 1)
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        else:
+            raise ValueError(f"X doit être 2D (n_samples, n_features), reçu: {X_arr.shape}")
+
+    if len(y_arr) != X_arr.shape[0]:
+        raise ValueError(f"Incohérence dimensions : X a {X_arr.shape[0]} lignes, y a {len(y_arr)} labels.")
+
+    if len(y_arr) == 0:
+        raise ValueError("Les données d'entraînement sont vides.")
+
+    return X_arr, y_arr
+
+def encode_target(y):
+    """
+    Encode les classes cibles (ex: ['chat', 'chien']) en entiers (ex: [0, 1]).
+    
+    Returns
+    -------
+    y_encoded : np.ndarray (int)
+    classes : np.ndarray (les labels originaux)
+    """
+    y = np.asarray(y).ravel()
+    classes, y_encoded = np.unique(y, return_inverse=True)
+    return y_encoded, classes
+
+def clean_data(X):
+    """
+    Remplace les valeurs infinies par NaN (pour être gérées par la stratégie C5.0).
+    Ne supprime PAS les lignes (on veut garder l'information).
+    """
+    X_arr = np.array(X, copy=True)
+    
+    # Si c'est numérique, on nettoie les infinis
+    if np.issubdtype(X_arr.dtype, np.number):
+        X_arr[~np.isfinite(X_arr)] = np.nan
+        
+    return X_arr
