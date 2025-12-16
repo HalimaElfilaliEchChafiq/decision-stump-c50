@@ -4,9 +4,8 @@ Version Compatible Scikit-Learn (BaseEstimator, ClassifierMixin).
 """
 
 from __future__ import annotations
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union, List, Any
 import numpy as np
-import warnings
 
 # Gestion robuste de l'import pandas
 try:
@@ -14,12 +13,12 @@ try:
 except ImportError:
     pd = None
 
-# --- AJOUT INDISPENSABLE POUR SKLEARN ---
+# --- SKLEARN ---
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
 
-# Imports internes
+# Imports internes (relatifs)
 from .splitters import find_best_split
 
 class DecisionStump(BaseEstimator, ClassifierMixin):
@@ -42,14 +41,14 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
 
     def fit(
         self,
-        X: Union[np.ndarray, "pd.DataFrame"],
+        X: Union[np.ndarray, Any], # Correction ici : 'Any' remplace "pd.DataFrame"
         y: Union[np.ndarray, list],
         sample_weight: Optional[Union[np.ndarray, list]] = None,
         feature_names: Optional[List[str]] = None,
     ) -> "DecisionStump":
         """Entraîne le modèle sur les données."""
         
-        # Réinitialisation des attributs
+        # 0. Reset
         self.feature_index_ = None
         self.feature_name_ = None
         self.feature_type_ = None
@@ -59,35 +58,32 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
         self.root_distribution_ = None
         self.branch_proportions_ = None
         
-        # 1. Validation Sklearn (convertit tout en numpy)
-        # accept_sparse=False car notre stump ne gère pas les matrices creuses pour l'instant
-        # force_all_finite='allow-nan' car on gère les NaN (C5.0)
+        # 1. Validation Sklearn
         X_array, y_array = check_X_y(X, y, force_all_finite='allow-nan', dtype=None)
         
         self.classes_ = unique_labels(y_array)
         self.n_classes_ = len(self.classes_)
         
-        # Gestion des poids
+        # Poids
         if sample_weight is None:
             sample_weight_array = np.ones(len(y_array))
         else:
             sample_weight_array = np.asarray(sample_weight).ravel()
         
-        # Normalisation des poids
         total_weight = np.sum(sample_weight_array)
         if total_weight > 0:
             sample_weight_array /= total_weight
 
-        # Noms de features
+        # Noms features
         self.feature_names_ = self._get_feature_names(X, feature_names, X_array.shape[1])
 
-        # 2. Calcul de la distribution racine
+        # 2. Distribution Racine
         self.root_distribution_ = self._compute_class_distribution(y_array, sample_weight_array)
 
-        # 3. Détection des types
+        # 3. Détection Types
         feature_types = self._detect_feature_types(X_array)
 
-        # 4. Recherche du meilleur split
+        # 4. Recherche Split
         best_score = -np.inf
         best_split_info = None
 
@@ -113,15 +109,12 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
         if best_split_info:
             self._store_split_info(best_split_info, X_array, y_array, sample_weight_array)
         else:
-            # Mode constant
             self._store_no_split_info()
 
-        # Marqueur officiel sklearn pour dire "je suis entraîné"
         self.is_fitted_ = True
         return self
 
-    def predict(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
-        """Prédit les classes."""
+    def predict(self, X: Union[np.ndarray, Any]) -> np.ndarray: # Correction ici
         check_is_fitted(self)
         X_array = check_array(X, force_all_finite='allow-nan', dtype=None)
         
@@ -133,8 +126,7 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
 
         return predictions
     
-    def predict_proba(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
-        """Prédit les probabilités."""
+    def predict_proba(self, X: Union[np.ndarray, Any]) -> np.ndarray: # Correction ici
         check_is_fitted(self)
         X_array = check_array(X, force_all_finite='allow-nan', dtype=None)
         
@@ -147,7 +139,7 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
         return proba
 
     # =========================================================================
-    # Helpers Internes
+    # Helpers Robustes
     # =========================================================================
 
     def _get_feature_names(self, X_origin, feature_names_arg, n_cols):
@@ -225,7 +217,11 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
 
     def _get_branch(self, feature_val):
         if self.feature_type_ == "numerical":
-            return "left" if feature_val <= self.threshold_ else "right"
+            try:
+                val = float(feature_val)
+            except (ValueError, TypeError):
+                val = 0.0 
+            return "left" if val <= self.threshold_ else "right"
         else:
             return "left" if feature_val in self.categories_ else "right"
 
@@ -237,7 +233,7 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
             return self.classes_[np.argmax(weighted_probs)]
         elif self.missing_strategy == "majority":
             return self.classes_[np.argmax(self.root_distribution_)]
-        else: # ignore or random
+        else:
             return np.random.choice(self.classes_)
 
     def _handle_missing_probability(self):
@@ -250,7 +246,6 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
             return self.root_distribution_
 
     def _compute_class_distribution(self, y, sample_weight):
-        # Utilisation de self.classes_ pour garantir l'ordre et la taille
         dist = np.zeros(self.n_classes_)
         for i, cls in enumerate(self.classes_):
             mask = (y == cls)
@@ -266,19 +261,33 @@ class DecisionStump(BaseEstimator, ClassifierMixin):
         types = []
         for i in range(X.shape[1]):
             col = X[:, i]
-            # On ignore les NaNs pour détecter le type
-            valid = col[~self._is_nan_array(col)]
+            valid_mask = ~self._is_nan_array(col)
+            valid = col[valid_mask]
             
             if len(valid) == 0:
                 types.append("categorical")
                 continue
+            
+            try:
+                np.array(valid).astype(float)
+                is_num = True
+            except (ValueError, TypeError):
+                is_num = False
                 
-            is_num = np.issubdtype(np.array(valid).dtype, np.number)
             types.append("numerical" if is_num else "categorical")
         return types
         
     def _is_nan(self, val):
-        return val is None or (isinstance(val, float) and np.isnan(val))
+        try:
+            return val is None or (isinstance(val, float) and np.isnan(val))
+        except:
+            return False
 
     def _is_nan_array(self, arr):
-        return pd.isna(arr) if pd is not None else np.isnan(arr.astype(float))
+        if pd is not None:
+            return pd.isna(arr)
+        
+        mask = np.zeros(arr.shape, dtype=bool)
+        for i, val in enumerate(arr):
+            mask[i] = self._is_nan(val)
+        return mask
